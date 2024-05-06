@@ -28,8 +28,12 @@ let rec eat_whitespace stm =
 type lobject =
   | Fixnum of int
   | Boolean of bool
+  | Symbol of string
   
 exception SyntaxError of string;;
+
+let stringOfChar c = 
+    String.make 1 c;;
 
 let rec read_sexp stm =
   let is_digit c =
@@ -44,9 +48,30 @@ let rec read_sexp stm =
       let _ = unread_char stm nc in
       Fixnum(int_of_string acc)
   in
+  let is_symstartchar =
+      let isalpha = function | 'A'..'Z'|'a'..'z' -> true
+                             | _ -> false
+      in
+      function | '*'|'/'|'>'|'<'|'='|'?'|'!'|'-'|'+' -> true
+               | c -> isalpha c
+  in
+  let rec read_symbol () =
+      let literalQuote = String.get "\"" 0 in
+      let is_delimiter = function | '('|')'|'{'|'}'|';' -> true
+                                  | c when c=literalQuote -> true
+                                  | c -> is_white c
+      in
+      let nc = read_char stm in
+      if is_delimiter nc
+      then let _ = unread_char stm nc in ""
+      else stringOfChar nc ^ read_symbol ()
+  in
   eat_whitespace stm;
   let c = read_char stm in
-  if (is_digit c) || (c = '~') then read_fixnum (Char.escaped (if c='~' then '-' else c))
+  if is_symstartchar c 
+  then Symbol(stringOfChar c ^ read_symbol ())
+  else if is_digit c || c='~'
+  then read_fixnum (stringOfChar (if c='~' then '-' else c))
   else if c = '#' then
     match (read_char stm) with
     | 't' -> Boolean(true)
@@ -57,7 +82,8 @@ let rec read_sexp stm =
 let rec print_sexp e = 
   match e with
   | Fixnum(v) -> print_int v
-  | Boolean(b) -> print_string (if b then "#t" else "#F")  
+  | Boolean(b) -> print_string (if b then "#t" else "#F")
+  | Symbol(s) -> print_string s  
 
 let rec repl stm =
   print_string "> ";
