@@ -1,6 +1,8 @@
 type stream = 
   {mutable line_num: int; mutable chr: char list; chan: in_channel };;
 
+let stringOfChar c = 
+   String.make 1 c;;
 
 let read_char stm = 
   match stm.chr with
@@ -29,11 +31,18 @@ type lobject =
   | Fixnum of int
   | Boolean of bool
   | Symbol of string
+  | Nil
+  | Pair of lobject * lobject
   
 exception SyntaxError of string;;
+exception ThisCan'tHappenError;;
 
-let stringOfChar c = 
-    String.make 1 c;;
+let rec pair_to_list pr =
+  match pr with
+  | Nil -> []
+  | Pair(a, b) -> a::(pair_to_list b)
+  | _ -> raise ThisCan'tHappenError;;
+
 
 let rec read_sexp stm =
   let is_digit c =
@@ -43,7 +52,7 @@ let rec read_sexp stm =
   let rec read_fixnum acc =
     let nc = read_char stm in
     if is_digit nc
-    then read_fixnum (acc ^ (Char.escaped nc))
+    then read_fixnum (acc ^ stringOfChar nc)
     else
       let _ = unread_char stm nc in
       Fixnum(int_of_string acc)
@@ -56,9 +65,7 @@ let rec read_sexp stm =
                | c -> isalpha c
   in
   let rec read_symbol () =
-      let literalQuote = String.get "\"" 0 in
-      let is_delimiter = function | '('|')'|'{'|'}'|';' -> true
-                                  | c when c=literalQuote -> true
+      let is_delimiter = function | '('|')'|'{'|'}'|'"'| ';' -> true
                                   | c -> is_white c
       in
       let nc = read_char stm in
@@ -66,24 +73,62 @@ let rec read_sexp stm =
       then let _ = unread_char stm nc in ""
       else stringOfChar nc ^ read_symbol ()
   in
+  let rec read_list stm = 
+    eat_whitespace stm;
+    let c = read_char stm in
+    if c = ')' then
+      Nil
+    else 
+      let _ = unread_char stm c in
+      let car = read_sexp stm in
+      let cdr = read_list stm in
+      Pair(car, cdr)
+  in
   eat_whitespace stm;
   let c = read_char stm in
   if is_symstartchar c 
   then Symbol(stringOfChar c ^ read_symbol ())
   else if is_digit c || c='~'
   then read_fixnum (stringOfChar (if c='~' then '-' else c))
+  else if c = '('
+  then read_list stm
   else if c = '#' then
     match (read_char stm) with
     | 't' -> Boolean(true)
     | 'f' -> Boolean(false)
-    | x -> raise (SyntaxError ("Invalid boolean literal " ^ (Char.escaped x)))
-  else raise (SyntaxError ("Unexpected char " ^ (Char.escaped c)));;
+    | x -> raise (SyntaxError ("Invalid boolean literal " ^ (stringOfChar x)))
+  else raise (SyntaxError ("Unexpected char " ^ (stringOfChar c)));;
 
 let rec print_sexp e = 
-  match e with
-  | Fixnum(v) -> print_int v
-  | Boolean(b) -> print_string (if b then "#t" else "#F")
-  | Symbol(s) -> print_string s  
+    let rec is_list e = 
+        match e with 
+        | Nil -> true
+        | Pair(a, b) -> is_list b
+        | _ -> false
+    in
+    let rec print_list l = 
+      match l with
+      | Pair(a, Nil) -> print_sexp a
+      | Pair(a, b) -> print_sexp a; print_string " "; print_list b
+      | _ -> raise ThisCan'tHappenError
+    in
+    let print_pair p =
+      match p with
+      | Pair(a, b) -> print_sexp a; print_string " . "; print_sexp b
+      | _ -> raise ThisCan'tHappenError
+    in
+    match e with
+    | Fixnum(v) -> print_int v
+    | Boolean(b) -> print_string (if b then "#t" else "#f")
+    | Symbol(s) -> print_string s
+    | Nil -> print_string "nil"
+    | Pair(a, b) ->
+            print_string "(";
+            if is_list e
+            then print_list e
+            else print_pair e;
+            print_string ")";;
+  
 
 let rec repl stm =
   print_string "> ";
@@ -91,6 +136,8 @@ let rec repl stm =
   let sexp = read_sexp stm in
   print_sexp sexp;
   print_newline ();
-  repl stm;;let main = 
-  let stm = {chr=[]; line_num=1; chan=stdin} in
+  repl stm;;
+  
+let main =
+  let stm = { chr=[]; line_num=1; chan=stdin } in
   repl stm;;
