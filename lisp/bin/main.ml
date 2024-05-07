@@ -34,6 +34,7 @@ type lobject =
   | Nil
   | Pair of lobject * lobject
   | Primitive of string * (lobject list -> lobject)
+  | Quote of value
 
 and value = lobject
 and name = string
@@ -124,6 +125,7 @@ let rec read_sexp stm =
       | 't' -> Boolean(true)
       | 'f' -> Boolean(false)
       | x -> raise (SyntaxError ("Invalid boolean literal " ^ (stringOfChar x)))
+    else if c = '\'' then Quote (read_sexp stm)
     else raise (SyntaxError ("Unexpected char " ^ (stringOfChar c)));;
 
 let rec is_list e = 
@@ -166,6 +168,7 @@ and string_val e =
   | Pair(a, b) ->
         "(" ^ (if is_list e then string_list e else string_pair e) ^ ")"
   | Primitive (name, _) -> "#<primitive:" ^ name ^ ">"
+  | Quote v -> " " ^ string_val v
 
 
 exception ParseError of string
@@ -173,7 +176,7 @@ exception ParseError of string
 let rec build_ast sexp =
     match sexp with
     | Primitive _ -> raise ThisCan'tHappenError
-    | Fixnum _ | Boolean _ | Nil -> Literal sexp
+    | Fixnum _ | Boolean _ | Nil | Quote _ -> Literal sexp
     | Symbol s -> Var s
     | Pair _ when is_list  sexp ->
       (match pair_to_list sexp with
@@ -181,6 +184,7 @@ let rec build_ast sexp =
           If (build_ast cond, build_ast iftrue, build_ast iffalse)
       | [Symbol "and"; c1; c2] -> And (build_ast c1, build_ast c2)
       | [Symbol "or"; c1; c2] -> Or (build_ast c1, build_ast c2)
+      | [Symbol "quote"; e] -> Literal (Quote e)
       | [Symbol "val"; Symbol n; e] -> Defexp (Val (n, build_ast e))
       | [Symbol "apply"; fnexp; args] ->
           Apply (build_ast fnexp, build_ast args)
@@ -195,6 +199,7 @@ let rec evalexp exp env =
     | _ -> raise (TypeError "(apply prim '(args)) or (prim args)")
   in
   let rec ev = function
+    | Literal Quote e -> e
     | Literal l -> l
     | Var n -> lookup (n, env)
     | If (c, t, f) when ev c = Boolean true -> ev t
@@ -233,7 +238,7 @@ let rec repl stm env =
   flush stdout;
   let ast = build_ast (read_sexp stm) in
   let (result, env') = eval ast env in
-  let () = print_endline (string_val result) in
+  print_endline (string_val result);
   repl stm env';;
 
 let basis =
