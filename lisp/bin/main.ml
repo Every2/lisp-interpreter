@@ -37,6 +37,24 @@ type lobject =
 exception SyntaxError of string;;
 exception ThisCan'tHappenError;;
 exception NotFound of string;;
+exception TypeError of string;;
+
+let rec eval_sexp sexp env = 
+  let eval_if cond iftrue iffalse =
+    let (condval, _) = eval_sexp cond env in
+    match condval with
+    | Boolean(true) -> iftrue
+    | Boolean(false) -> iffalse
+    | _ -> raise (TypeError "(if bool e1 e2)")
+  in
+  match sexp with
+  | Fixnum(v) -> (Fixnum(v), env)
+  | Boolean(v) -> (Boolean(v), env)
+  | Symbol(v) -> (Symbol(v), env)
+  | Nil -> (Nil, env)
+  | Pair(Symbol "if", Pair(cond, Pair(iftrue, Pair(iffalse, Nil)))) ->
+          eval_sexp (eval_if cond iftrue iffalse) env
+  | _ -> (sexp, env)
 
 let bind (n, v, e) = Pair(Pair(Symbol n, v), e);;
 
@@ -141,14 +159,15 @@ let rec print_sexp e =
             print_string ")";;
   
 
-let rec repl stm =
+let rec repl stm env =
   print_string "> ";
   flush stdout;
   let sexp = read_sexp stm in
-  print_sexp sexp;
+  let (result, env') = eval_sexp sexp env in
+  print_sexp result;
   print_newline ();
-  repl stm;;
+  repl stm env';;
   
 let main =
   let stm = { chr=[]; line_num=1; chan=stdin } in
-  repl stm;;
+  repl stm Nil;;
