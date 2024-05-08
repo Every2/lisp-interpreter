@@ -143,9 +143,13 @@ let rec read_sexp stm =
         let cdr = read_list stm in
         Pair(car, cdr)
     in
+    let rec eat_comment stm =
+      if (read_char stm) = '\n' then () else eat_comment stm
+    in
     eat_whitespace stm;
     let c = read_char stm in
-    if is_symstartchar c 
+    if c = ';' then (eat_comment stm; read_sexp stm)
+    else if is_symstartchar c 
     then Symbol(stringOfChar c ^ read_symbol ())
     else if is_digit c || c='~'
     then read_fixnum (stringOfChar (if c='~' then '-' else c))
