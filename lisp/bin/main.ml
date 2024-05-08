@@ -346,11 +346,10 @@ let eval ast env =
   | e -> (evalexp e env, env)
 
 let rec repl stm env =
-  print_string "> ";
-  flush stdout;
+  if stm.chan=stdin then ( print_string "> "; flush stdout; );
   let ast = build_ast (read_sexp stm) in
   let (result, env') = eval ast env in
-  print_endline (string_val result);
+  if stm.chan=stdin then print_endline (string_val result);
   repl stm env';;
 
 let basis =
@@ -393,10 +392,28 @@ let basis =
     | [_] -> Boolean false
     | _ -> raise (TypeError "(sym? single-arg)")
   in
+  let prim_getchar = function
+    | [] -> 
+        (try Fixnum (int_of_char @@ input_char stdin)
+        with End_of_file -> Fixnum (-1))
+    | _ -> raise (TypeError "(getchar)")
+  in
+  let prim_print = function
+    | [v] -> let () = print_string @@ string_val v in Symbol "ok"
+    | _ -> raise (TypeError "(print val)")
+  in
+  let prim_itoc = function
+    | [Fixnum i] -> Symbol (stringOfChar @@ char_of_int i)
+    | _ -> raise (TypeError "(itoc int)")
+  in
+  let prim_cat = function
+    | [Symbol a; Symbol b] -> Symbol (a ^ b)
+    | _ -> raise (TypeError "(cat sym sym)")
+  in
   let newprim acc (name, func) =
       bind (name, Primitive(name, func), acc)
   in
-  List.fold_left newprim [] [
+  List.fold_left newprim ["empty-symbol", ref (Some (Symbol ""))] [
       numprim "+" (+);
       numprim "-" (-);
       numprim "*" ( * );
@@ -410,9 +427,19 @@ let basis =
       ("cdr", prim_cdr);
       ("eq", prim_eq);
       ("atom?", prim_atomp);
+      ("getchar", prim_getchar);
+      ("print", prim_print);
+      ("itoc", prim_itoc);
+      ("cat", prim_cat);
       ("sym?", prim_symp)
   ]
+
+let get_ic () =
+  try open_in Sys.argv.(1)
+  with Invalid_argument s -> stdin 
   
 let main =
-  let stm = { chr=[]; line_num=1; chan=stdin } in
-  repl stm basis;;
+  let ic = get_ic () in
+  let stm = { chr=[]; line_num=1; chan=ic } in
+  try repl stm basis
+  with End_of_file -> if ic <> stdin then close_in ic
