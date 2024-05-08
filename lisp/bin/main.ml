@@ -27,6 +27,8 @@ let rec eat_whitespace stm =
     unread_char stm c;
     ();;
 
+type 'a env = (string * 'a option ref) list
+
 type lobject =
   | Fixnum of int
   | Boolean of bool
@@ -35,6 +37,7 @@ type lobject =
   | Pair of lobject * lobject
   | Primitive of string * (lobject list -> lobject)
   | Quote of value
+  | Closure of name list * exp * value env
 
 and value = lobject
 and name = string
@@ -46,10 +49,12 @@ and exp =
   | Or of exp * exp
   | Apply of exp * exp
   | Call of exp * exp list
+  | Lambda of name list * exp
   | Defexp of def
 
 and def =
   | Val of name * exp
+  | Def of name * name list * exp
   | Exp of exp
   
 exception SyntaxError of string;;
@@ -57,14 +62,35 @@ exception ThisCan'tHappenError;;
 exception NotFound of string;;
 exception TypeError of string;;
 
-let bind (n, v, e) = Pair(Pair(Symbol n, v), e);;
+let bind (n, v, e) = (n, ref (Some v))::e
+let mkloc () = ref None
+let bindloc : name * 'a option ref * 'a env -> 'a env = fun (n, vor, e) -> (n, vor)::e
 
-let rec lookup (n, e) =
-  match e with
-  | Nil -> raise (NotFound n)
-  | Pair(Pair(Symbol n', v), rst) ->
-          if n=n' then v else lookup (n, rst)
-  | _ -> raise ThisCan'tHappenError;;
+exception UnspecifiedValue of string
+
+let rec lookup : name * 'a env -> 'a = function
+  | (n, []) -> raise (NotFound n)
+  | (n, (n', v)::_) when n=n' ->
+    begin
+      match !v with
+      | Some v' -> v'
+      | None -> raise (UnspecifiedValue n)
+    end
+  | (n, (n', _)::bs) -> lookup (n, bs)
+  
+let bindlist ns vs env =
+  List.fold_left2 (fun acc n v -> bind (n, v, acc)) env ns vs
+
+let rec env_to_val =
+  let b_to_val (n, vor) =
+    Pair (Symbol n, (match !vor with
+                     | None -> Symbol "unspecified"
+                     | Some v -> v))
+  in
+  function   
+  | [] -> Nil
+  | b::bs -> Pair(b_to_val b, env_to_val bs)
+
 
 let rec pair_to_list pr =
   match pr with
@@ -134,7 +160,11 @@ let rec is_list e =
     | Pair(a, b) -> is_list b
     | _ -> false
 
-let rec string_exp = function
+let spacesep ns = String.concat " " ns
+
+let rec string_exp = 
+  let spacesep_exp es = spacesep (List.map string_exp es) in
+  function
   | Literal e -> string_val e
   | Var n -> n
   | If (c, t, f) -> 
@@ -142,10 +172,11 @@ let rec string_exp = function
   | And (c0, c1) -> "(and " ^ string_exp c0 ^ " " ^ string_exp c1 ^ ")"
   | Or (c0, c1) ->  "(or " ^ string_exp c0 ^ " " ^ string_exp c1 ^ ")"
   | Apply (f, e) -> "(apply " ^ string_exp f ^ " " ^ string_exp e ^ ")"
-  | Call (f, es) -> 
-    let string_es = (String.concat " " (List.map string_exp es)) in
-    "(" ^ string_exp f ^ " " ^ string_es ^ ")"
+  | Call (f, es) -> "(" ^ string_exp f ^ " " ^ spacesep_exp es ^ ")"
+  | Lambda (ns, e) -> "#<Lambda>"
   | Defexp (Val (n, e)) -> "(val " ^ n ^ " " ^ string_exp e ^ ")"
+  | Defexp (Def (n, ns, e)) -> 
+            "(define " ^ n ^ "(" ^ spacesep ns ^ ") " ^ string_exp e ^ ")"
   | Defexp (Exp e) -> string_exp e
 
 and string_val e =
@@ -168,6 +199,7 @@ and string_val e =
   | Pair(a, b) ->
         "(" ^ (if is_list e then string_list e else string_pair e) ^ ")"
   | Primitive (name, _) -> "#<primitive:" ^ name ^ ">"
+  | Closure (ns, e, _) -> "#<closure>"
   | Quote v -> " " ^ string_val v
 
 
@@ -175,7 +207,7 @@ exception ParseError of string
 
 let rec build_ast sexp =
     match sexp with
-    | Primitive _ -> raise ThisCan'tHappenError
+    | Primitive _ | Closure _ -> raise ThisCan'tHappenError
     | Fixnum _ | Boolean _ | Nil | Quote _ -> Literal sexp
     | Symbol s -> Var s
     | Pair _ when is_list  sexp ->
@@ -186,6 +218,16 @@ let rec build_ast sexp =
       | [Symbol "or"; c1; c2] -> Or (build_ast c1, build_ast c2)
       | [Symbol "quote"; e] -> Literal (Quote e)
       | [Symbol "val"; Symbol n; e] -> Defexp (Val (n, build_ast e))
+      | [Symbol "lambda"; ns; e] when is_list ns ->
+          let err () = raise (TypeError "(Lambda (formals) body)") in
+          let names = List.map (function Symbol s -> s | _ -> err ())
+                                (pair_to_list ns)
+          in Lambda ((names, build_ast e))
+      | [Symbol "define"; Symbol n; ns; e] -> 
+          let err () = raise (TypeError "(Lambda (formals) body)") in
+          let names = List.map (function Symbol s -> s | _ -> err ())
+                                (pair_to_list ns)
+          in Defexp (Def (n, names, build_ast e))
       | [Symbol "apply"; fnexp; args] ->
           Apply (build_ast fnexp, build_ast args)
       | fnexp::args -> Call (build_ast fnexp, List.map build_ast args)
@@ -193,9 +235,10 @@ let rec build_ast sexp =
     | Pair _ -> Literal sexp
   
 let rec evalexp exp env =
-  let evalapply f es =
+  let evalapply f vs =
     match f with
-    | Primitive (_, f) -> f es
+    | Primitive (_, f) -> f vs
+    | Closure (ns, e, clenv) -> evalexp e (bindlist ns vs clenv)
     | _ -> raise (TypeError "(apply prim '(args)) or (prim args)")
   in
   let rec ev = function
@@ -218,14 +261,25 @@ let rec evalexp exp env =
         | _ -> raise (TypeError "(and bool bool)")
       end
     | Apply (fn, e) ->  evalapply (ev fn) (pair_to_list (ev e))
-    | Call (Var "env", []) -> env
+    | Call (Var "env", []) -> env_to_val env
     | Call (e, es) -> evalapply (ev e) (List.map ev es)
+    | Lambda (ns, e) -> Closure (ns, e, env)
     | Defexp d -> raise ThisCan'tHappenError
   in ev exp
 
 let evaldef def env =
   match def with 
   | Val (n, e) -> let v = evalexp e env in (v, bind (n, v, env))
+  | Def (n, ns, e) -> 
+      let (formals, body, cl_env) = 
+          (match evalexp (Lambda (ns, e)) env with
+          | Closure (fs, bod, env) -> (fs, bod, env)
+          | _ -> raise (TypeError "Expecting closure."))
+      in
+      let loc = mkloc () in
+      let clo = Closure (formals, body, bindloc (n, loc, cl_env)) in
+      let () = loc := Some clo in
+      (clo, bindloc (n, loc, env))
   | Exp e -> (evalexp e env, env)
 
 let eval ast env =
@@ -257,7 +311,7 @@ let basis =
   let newprim acc (name, func) =
       bind (name, Primitive(name, func), acc)
   in
-  List.fold_left newprim Nil [
+  List.fold_left newprim [] [
       ("list", prim_list);
       ("+", prim_plus);
       ("pair", prim_pair)
