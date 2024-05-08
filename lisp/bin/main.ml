@@ -206,6 +206,12 @@ and string_val e =
 exception ParseError of string
 
 let rec build_ast sexp =
+  let rec cond_to_if = function
+    | [] -> Literal (Symbol "error")
+    | (Pair(cond, Pair(res, Nil)))::condpairs ->
+        If (build_ast cond, build_ast res, cond_to_if condpairs)
+    | _ -> raise (TypeError "(cond conditions)")
+    in
     match sexp with
     | Primitive _ | Closure _ -> raise ThisCan'tHappenError
     | Fixnum _ | Boolean _ | Nil | Quote _ -> Literal sexp
@@ -216,6 +222,7 @@ let rec build_ast sexp =
           If (build_ast cond, build_ast iftrue, build_ast iffalse)
       | [Symbol "and"; c1; c2] -> And (build_ast c1, build_ast c2)
       | [Symbol "or"; c1; c2] -> Or (build_ast c1, build_ast c2)
+      | (Symbol "cond")::conditions -> cond_to_if conditions
       | [Symbol "quote"; e] -> Literal (Quote e)
       | [Symbol "val"; Symbol n; e] -> Defexp (Val (n, build_ast e))
       | [Symbol "lambda"; ns; e] when is_list ns ->
@@ -234,11 +241,16 @@ let rec build_ast sexp =
       | [] -> raise (ParseError "poorly formed expression"))
     | Pair _ -> Literal sexp
   
+let extend newenv oldenv =
+  List.fold_right (fun (b, v) acc -> bindloc (b, v, acc)) newenv oldenv
+
+
 let rec evalexp exp env =
   let evalapply f vs =
     match f with
     | Primitive (_, f) -> f vs
-    | Closure (ns, e, clenv) -> evalexp e (bindlist ns vs clenv)
+    | Closure (ns, e, clenv) -> 
+        evalexp e (extend (bindlist ns vs clenv) env)
     | _ -> raise (TypeError "(apply prim '(args)) or (prim args)")
   in
   let rec ev = function
@@ -296,6 +308,14 @@ let rec repl stm env =
   repl stm env';;
 
 let basis =
+  let numprim name op =
+    (name, (function [Fixnum a; Fixnum b] -> Fixnum (op a b)
+            | _ -> raise (TypeError ("(" ^ name ^ "int int)"))))
+  in
+  let cmpprim name op =
+    (name, (function [Fixnum a; Fixnum b] -> Boolean (op a b)
+           | _ -> raise (TypeError ("(" ^ name ^ "int int )"))))
+  in
   let rec prim_list = function
       | [] -> Nil
       | car::cdr -> Pair(car, prim_list cdr)
@@ -307,6 +327,23 @@ let basis =
   let prim_pair = function
       | [a; b] -> Pair(a, b)
       | _ -> raise (TypeError "(pair a b)")
+  in
+  let prim_car = function
+    | [Pair (car, _)] -> car
+    | _ -> raise (TypeError "(car non-nil-pair)")
+  in
+  let prim_cdr = function
+    | [Pair (_, cdr)] -> cdr
+    | _ -> raise (TypeError "(cdr non-nil-pair)")
+  in
+  let prim_atomp = function
+    | [Pair (_, _)] -> Boolean false
+    | [_] -> Boolean true
+    | _ -> raise (TypeError "(atom? something)")
+  in
+  let prim_eq = function
+    | [a;b] -> Boolean (a=b)
+    | _ -> raise (TypeError "(eq a b)")
   in
   let newprim acc (name, func) =
       bind (name, Primitive(name, func), acc)
