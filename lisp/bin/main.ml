@@ -320,10 +320,6 @@ let basis =
       | [] -> Nil
       | car::cdr -> Pair(car, prim_list cdr)
   in
-  let prim_plus = function
-      | [Fixnum(a); Fixnum(b)] -> Fixnum(a+b)
-      | _ -> raise (TypeError "(+ int int)")
-  in
   let prim_pair = function
       | [a; b] -> Pair(a, b)
       | _ -> raise (TypeError "(pair a b)")
@@ -337,6 +333,7 @@ let basis =
     | _ -> raise (TypeError "(cdr non-nil-pair)")
   in
   let prim_atomp = function
+    | [Nil] -> Boolean true
     | [Pair (_, _)] -> Boolean false
     | [_] -> Boolean true
     | _ -> raise (TypeError "(atom? something)")
@@ -345,13 +342,29 @@ let basis =
     | [a;b] -> Boolean (a=b)
     | _ -> raise (TypeError "(eq a b)")
   in
+  let prim_symp = function
+    | [Symbol _] -> Boolean true
+    | [_] -> Boolean false
+    | _ -> raise (TypeError "(sym? single-arg)")
+  in
   let newprim acc (name, func) =
       bind (name, Primitive(name, func), acc)
   in
   List.fold_left newprim [] [
+      numprim "+" (+);
+      numprim "-" (-);
+      numprim "*" ( * );
+      numprim "/" (/);
+      cmpprim "<" (<);
+      cmpprim ">" (>);
+      cmpprim "=" (=);
       ("list", prim_list);
-      ("+", prim_plus);
-      ("pair", prim_pair)
+      ("pair", prim_pair);
+      ("car", prim_car);
+      ("cdr", prim_cdr);
+      ("eq", prim_eq);
+      ("atom?", prim_atomp);
+      ("sym?", prim_symp)
   ]
   
 let main =
